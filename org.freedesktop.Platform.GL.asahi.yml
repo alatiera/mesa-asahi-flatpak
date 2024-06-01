@@ -1,33 +1,28 @@
 id: org.freedesktop.Platform.GL.asahi
-branch: '22.08'
+branch: '23.08'
 runtime: org.freedesktop.Platform
 sdk: org.freedesktop.Sdk
-runtime-version: '22.08'
+runtime-version: '23.08'
 build-extension: true
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.llvm15
-build-options:
-  prepend-path: /usr/lib/sdk/llvm15/bin
-  prepend-ld-library-path: /usr/lib/sdk/llvm15/lib
+  - org.freedesktop.Sdk.Extension.llvm16
 
+build-options:
+  prepend-path: /usr/lib/sdk/llvm16/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm16/lib
+  build-args: [ "--share=network" ]
 
 x-arch-build-options:
   x86_64: &x86_64-build-options
     prefix: /usr/lib/x86_64-linux-gnu/GL/asahi
     prepend-pkg-config-path: /usr/lib/x86_64-linux-gnu/GL/asahi/lib/pkgconfig
     libdir: /usr/lib/x86_64-linux-gnu/GL/asahi/lib
-  # Needs https://github.com/flatpak/flatpak-builder/issues/381 to be resolved before this can actually be used. Until then, only 64-bit builds.
-  i386:
-    prefix: /usr/lib/i386-linux-gnu/GL/asahi
-    prepend-pkg-config-path: /usr/lib/i386-linux-gnu/GL/asahi/lib/pkgconfig
-    libdir: /usr/lib/i386-linux-gnu/GL/asahi/lib
 
   # org.freedesktop.Sdk.Compat.arm is deprecated, so only build for aarch64.
   aarch64: &aarch64-build-options
     prefix: /usr/lib/aarch64-linux-gnu/GL/asahi
-    prepend-pkg-config-path: /usr/lib/aarch64-linux-gnu/GL/asahi/lib/pkgconfig
+    prepend-pkg-config-path: /usr/lib/aarch64-linux-gnu/GL/asahi/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/GL/asahi/share/pkgconfig
     libdir: /usr/lib/aarch64-linux-gnu/GL/asahi/lib
-
 
 cleanup:
   - /include
@@ -37,6 +32,7 @@ cleanup:
   - /share/man
   - '*.la'
   - '*.a'
+
 modules:
   - name: libdrm
     build-options:
@@ -51,12 +47,77 @@ modules:
     sources:
       - type: git
         url: https://gitlab.freedesktop.org/mesa/drm.git
-        tag: libdrm-2.4.114
-        commit: b9ca37b3134861048986b75896c0915cbf2e97f9
-#         x-checker-data: 
-#           type: git
-#           tag-pattern: ^libdrm-(\d[\d.]+\d)$
+        tag: libdrm-2.4.120
 
+  - name: spirv-headers
+    build-options:
+      arch:
+        x86_64: *x86_64-build-options
+        aarch64: *aarch64-build-options
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu/GL/asahi/lib
+    sources:
+      - type: git
+        url: https://github.com/KhronosGroup/SPIRV-Headers.git
+        branch: "vulkan-sdk-1.3.283"
+
+  - name: spirv-tools
+    build-options:
+      arch:
+        x86_64: *x86_64-build-options
+        aarch64: *aarch64-build-options
+    config-opts:
+      - -DCMAKE_INSTALL_PREFIX=/usr/lib/aarch64-linux-gnu/GL/asahi
+    buildsystem: cmake-ninja
+    sources:
+      - type: git
+        url: https://github.com/KhronosGroup/SPIRV-Tools.git
+        tag: v2024.1
+        commit: 04896c462d9f3f504c99a4698605b6524af813c1
+      - type: git
+        url: https://github.com/KhronosGroup/SPIRV-Headers.git
+        tag: vulkan-sdk-1.3.283.0
+        commit: 4f7b471f1a66b6d06462cd4ba57628cc0cd087d7
+        dest: external/spirv-headers
+      - type: patch
+        path: "3906.patch"
+
+  # - name: test
+  #   buildsystem: simple
+  #   build-commands:
+  #     - ls -R /usr/lib/aarch64-linux-gnu/GL/asahi/lib
+  #     - cat /usr/lib/aarch64-linux-gnu/GL/asahi/lib/pkgconfig/*
+  #     - exit 1
+
+  - name: llvm-translator
+    build-options:
+      arch:
+        x86_64: *x86_64-build-options
+        aarch64: *aarch64-build-options
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR=/usr/lib/aarch64-linux-gnu/GL/asahi
+      - -DLLVM_SPIRV_INCLUDE_TESTS=OFF
+      - -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu/GL/asahi/lib
+    sources:
+      - type: git
+        url: https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
+        branch: "llvm_release_160"
+
+  - name: libclc
+    build-options:
+      arch:
+        x86_64: *x86_64-build-options
+        aarch64: *aarch64-build-options
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu/GL/asahi/lib
+      - -DLIBCLC_TARGETS_TO_BUILD=amdgcn--,amdgcn--amdhsa,clspv--,clspv64--,r600--
+    sources:
+      - type: archive
+        url: https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.6/libclc-16.0.6.src.tar.xz
+        sha256: "61952af79c555d50bc88cb6f134d9abe9278f65dd34c2bc945cc3d324c2af224"
 
   - name: mesa
     build-options:
@@ -76,9 +137,6 @@ modules:
       - -Dgallium-drivers=swrast,virgl,kmsro,asahi
       - -Dvulkan-drivers=swrast
 
-      # Will this one mess the builds up? Dunno, but upstream Asahi builds with it like this.
-      - -Dvulkan-layers=
-
       - -Ddri3=enabled
       - -Degl=enabled
       - -Dgallium-extra-hud=true
@@ -96,20 +154,16 @@ modules:
       - -Dosmesa=true
       - -Dshared-glapi=enabled
       - -Dmicrosoft-clc=disabled
-      - -Dvalgrind=enabled
 
     sources:
       - type: archive
-        url: https://gitlab.freedesktop.org/asahi/mesa/-/archive/asahi-20230904/mesa-asahi-20230904.tar.bz2
-        sha256: ce96f78d81e558adf0521c44782bea6955bc02ab362e22712b8e0bc7b7eb74cd
-        x-checker-data:
-          type: html
-          url: https://github.com/AsahiLinux/PKGBUILDs/raw/main/mesa-asahi-edge/PKGBUILD
-          version-pattern: _asahiver=(.+)
-          url-template: https://gitlab.freedesktop.org/asahi/mesa/-/archive/asahi-$version/mesa-asahi-$version.tar.bz2
+        # url: https://gitlab.freedesktop.org/asahi/mesa/-/archive/asahi-20230904/mesa-asahi-20230904.tar.bz2
+        # sha256: ce96f78d81e558adf0521c44782bea6955bc02ab362e22712b8e0bc7b7eb74cd
+        url: https://gitlab.freedesktop.org/asahi/mesa/-/archive/asahi-20240228/mesa-asahi-20240228.tar.bz2
+        sha256: 076bb4b78fa0645be6199ecdb4a0cc6c15c2a52514b73942f0da670857628974
 
   # We might need to make this do some arch-specific stuff later for i386 builds, but as of the time of writing we only do 64-bit builds so we'll be fine.
   - name: llvm
     buildsystem: simple
     build-commands:
-      - cp /usr/lib/sdk/llvm15/lib/libLLVM-15.so /usr/lib/$(uname -m)-linux-gnu/GL/asahi/lib
+      - cp /usr/lib/sdk/llvm16/lib/libLLVM-16.so /usr/lib/$(uname -m)-linux-gnu/GL/asahi/lib
